@@ -19,7 +19,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   const mapRef = useRef<maplibregl.Map | null>(null)
   const cpDragMarkerRef = useRef<maplibregl.Marker | null>(null)
 
-  const { selectedCpId, setSelectedCpId, updateCp, basemap, updateBasemapCorners, basemapPivot } = useProjectStore()
+  const { selectedCpId, setSelectedCpId, updateCp, basemap, updateBasemapCorners, basemapPivot, setBasemapPivot } = useProjectStore()
 
   const projectRef = useRef(project)
   projectRef.current = project
@@ -31,6 +31,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   onCpCandidateClickRef.current = onCpCandidateClick
   const updateBasemapCornersRef = useRef(updateBasemapCorners)
   updateBasemapCornersRef.current = updateBasemapCorners
+  const setBasemapPivotRef = useRef(setBasemapPivot)
+  setBasemapPivotRef.current = setBasemapPivot
   const basemapPivotRef = useRef(basemapPivot)
   basemapPivotRef.current = basemapPivot
 
@@ -180,15 +182,20 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
 
     basemapMarkersRef.current = markers
 
-    // ---- 全体移動（ベースマップ上をドラッグ） ----
-    let panStart: { lat: number; lng: number; snap: MapImageCorners } | null = null
+    // ---- 全体移動（ベースマップ上をドラッグ）十字も連動 ----
+    let panStart: { lat: number; lng: number; snap: MapImageCorners; snapPivot: { lat: number; lng: number } } | null = null
+    let livePivot = basemapPivotRef.current ?? calcCenter(basemap.corners)
 
     const onBasemapDown = (e: maplibregl.MapLayerMouseEvent) => {
       // CP・候補がある場所ではCP操作を優先
       const cpHit = map.queryRenderedFeatures(e.point, { layers: ['cps-outer', 'cpc-outer'] })
       if (cpHit.length > 0) return
       e.preventDefault()
-      panStart = { lat: e.lngLat.lat, lng: e.lngLat.lng, snap: deepCopyCorners(liveCorners) }
+      panStart = {
+        lat: e.lngLat.lat, lng: e.lngLat.lng,
+        snap: deepCopyCorners(liveCorners),
+        snapPivot: { ...livePivot },
+      }
       map.dragPan.disable()
       map.getCanvas().style.cursor = 'grabbing'
       map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
@@ -201,11 +208,13 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       for (const k of cornerKeys) {
         liveCorners[k] = { lat: panStart.snap[k].lat + dlat, lng: panStart.snap[k].lng + dlng }
       }
+      livePivot = { lat: panStart.snapPivot.lat + dlat, lng: panStart.snapPivot.lng + dlng }
       const src = map.getSource('basemap') as maplibregl.ImageSource | undefined
       src?.setCoordinates(cornersToMapLibre(liveCorners))
       ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
         ?.setData(cornersToPolygon(liveCorners))
       markers.forEach((m, i) => m.setLngLat([liveCorners[cornerKeys[i]].lng, liveCorners[cornerKeys[i]].lat]))
+      centerMarker.setLngLat([livePivot.lng, livePivot.lat])
     }
 
     const onMouseup = () => {
@@ -216,6 +225,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       map.setPaintProperty('basemap-layer', 'raster-opacity', 0.9)
       Object.assign(origCorners, deepCopyCorners(liveCorners))
       updateBasemapCornersRef.current({ ...liveCorners })
+      setBasemapPivotRef.current({ ...livePivot })
     }
 
     const onEnter = () => { if (!panStart) map.getCanvas().style.cursor = 'grab' }

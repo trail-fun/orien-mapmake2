@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useProjectStore, type LatLng } from '../store/projectStore'
 import type { MapImageCorners } from '../types'
 
@@ -7,6 +8,15 @@ function imgStep(c: MapImageCorners): number {
   const w = Math.hypot(c.top_right.lat - c.top_left.lat, c.top_right.lng - c.top_left.lng)
   const h = Math.hypot(c.bottom_left.lat - c.top_left.lat, c.bottom_left.lng - c.top_left.lng)
   return Math.min(w, h) * 0.03
+}
+
+function translateCorners(c: MapImageCorners, dlat: number, dlng: number): MapImageCorners {
+  return {
+    top_left:     { lat: c.top_left.lat + dlat,     lng: c.top_left.lng + dlng },
+    top_right:    { lat: c.top_right.lat + dlat,    lng: c.top_right.lng + dlng },
+    bottom_right: { lat: c.bottom_right.lat + dlat, lng: c.bottom_right.lng + dlng },
+    bottom_left:  { lat: c.bottom_left.lat + dlat,  lng: c.bottom_left.lng + dlng },
+  }
 }
 
 function scaleAroundPivot(c: MapImageCorners, factor: number, pivot: LatLng): MapImageCorners {
@@ -36,19 +46,25 @@ function rotateAroundPivot(c: MapImageCorners, angleDeg: number, pivot: LatLng):
   return result
 }
 
+type MoveMode = 'both' | 'crosshair'
+
 export default function BasemapAdjustPanel() {
   const { basemap, updateBasemapCorners, basemapPivot, setBasemapPivot } = useProjectStore()
+  const [moveMode, setMoveMode] = useState<MoveMode>('both')
+
   if (!basemap || !basemapPivot) return null
 
   const step = imgStep(basemap.corners)
-  const cosLat = Math.cos(basemapPivot.lat * Math.PI / 180)
-  const lngStep = step / cosLat
+  const lngStep = step / Math.cos(basemapPivot.lat * Math.PI / 180)
 
-  const movePivot = (dlat: number, dlng: number) =>
-    setBasemapPivot({ lat: basemapPivot.lat + dlat, lng: basemapPivot.lng + dlng })
-
-  const applyCorners = (fn: (c: MapImageCorners) => MapImageCorners) =>
-    updateBasemapCorners(fn(basemap.corners))
+  const move = (dlat: number, dlng: number) => {
+    if (moveMode === 'both') {
+      updateBasemapCorners(translateCorners(basemap.corners, dlat, dlng))
+      setBasemapPivot({ lat: basemapPivot.lat + dlat, lng: basemapPivot.lng + dlng })
+    } else {
+      setBasemapPivot({ lat: basemapPivot.lat + dlat, lng: basemapPivot.lng + dlng })
+    }
+  }
 
   const iconBtn = (icon: string, onClick: () => void) => (
     <button onClick={onClick} style={{
@@ -64,6 +80,21 @@ export default function BasemapAdjustPanel() {
     <div style={{ fontSize: 10, color: '#888', textAlign: 'center', marginTop: 2 }}>{text}</div>
   )
 
+  const tabBtn = (label: string, mode: MoveMode) => (
+    <button
+      onClick={() => setMoveMode(mode)}
+      style={{
+        flex: 1, padding: '4px 0', fontSize: 10, fontWeight: 600,
+        background: moveMode === mode ? '#1a3a2a' : '#f0f0f0',
+        color: moveMode === mode ? 'white' : '#555',
+        border: '1px solid #ccc', borderRadius: 4,
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  )
+
   return (
     <div style={{
       position: 'absolute', top: 10, left: 10, zIndex: 10,
@@ -75,32 +106,38 @@ export default function BasemapAdjustPanel() {
         ベースマップ調整
       </div>
 
-      {/* 十字移動 */}
-      {sectionLabel('十字移動')}
+      {/* 移動モード切替 */}
+      {sectionLabel('移動対象')}
+      <div style={{ display: 'flex', gap: 3 }}>
+        {tabBtn('地図+十字', 'both')}
+        {tabBtn('十字のみ', 'crosshair')}
+      </div>
+
+      {/* 移動ボタン */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 34px)', gap: 3 }}>
         <span />
-        {iconBtn('↑', () => movePivot(step, 0))}
+        {iconBtn('↑', () => move(step, 0))}
         <span />
-        {iconBtn('←', () => movePivot(0, -lngStep))}
+        {iconBtn('←', () => move(0, -lngStep))}
         <span />
-        {iconBtn('→', () => movePivot(0, lngStep))}
+        {iconBtn('→', () => move(0, lngStep))}
         <span />
-        {iconBtn('↓', () => movePivot(-step, 0))}
+        {iconBtn('↓', () => move(-step, 0))}
         <span />
       </div>
 
       {/* 拡縮（十字基点） */}
       {sectionLabel('拡縮')}
       <div style={{ display: 'flex', gap: 3, justifyContent: 'center' }}>
-        {iconBtn('＋', () => applyCorners(c => scaleAroundPivot(c, 1.03, basemapPivot)))}
-        {iconBtn('－', () => applyCorners(c => scaleAroundPivot(c, 1 / 1.03, basemapPivot)))}
+        {iconBtn('＋', () => updateBasemapCorners(scaleAroundPivot(basemap.corners, 1.03, basemapPivot)))}
+        {iconBtn('－', () => updateBasemapCorners(scaleAroundPivot(basemap.corners, 1 / 1.03, basemapPivot)))}
       </div>
 
       {/* 回転（十字基点、0.2°刻み） */}
       {sectionLabel('回転')}
       <div style={{ display: 'flex', gap: 3, justifyContent: 'center' }}>
-        {iconBtn('↺', () => applyCorners(c => rotateAroundPivot(c, 0.2, basemapPivot)))}
-        {iconBtn('↻', () => applyCorners(c => rotateAroundPivot(c, -0.2, basemapPivot)))}
+        {iconBtn('↺', () => updateBasemapCorners(rotateAroundPivot(basemap.corners, 0.2, basemapPivot)))}
+        {iconBtn('↻', () => updateBasemapCorners(rotateAroundPivot(basemap.corners, -0.2, basemapPivot)))}
       </div>
     </div>
   )
