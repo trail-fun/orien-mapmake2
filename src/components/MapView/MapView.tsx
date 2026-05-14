@@ -2,7 +2,7 @@ import { useRef, useEffect } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useProjectStore } from '../../store/projectStore'
-import type { ProjectData, Cp, CpCandidate, SurveyMemo, PointStyle, LineStyle, AreaStyle } from '../../types'
+import type { ProjectData, Cp, CpCandidate, SurveyMemo, PointStyle, LineStyle, AreaStyle, MapImageCorners } from '../../types'
 import { sortByOrder, cpLabel } from '../../lib/utils'
 
 interface Props {
@@ -19,7 +19,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   const mapRef = useRef<maplibregl.Map | null>(null)
   const cpDragMarkerRef = useRef<maplibregl.Marker | null>(null)
 
-  const { selectedCpId, setSelectedCpId, updateCp, basemap } = useProjectStore()
+  const { selectedCpId, setSelectedCpId, updateCp, basemap, updateBasemapCorners } = useProjectStore()
 
   const projectRef = useRef(project)
   projectRef.current = project
@@ -29,9 +29,12 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   onCpEditRef.current = onCpEdit
   const onCpCandidateClickRef = useRef(onCpCandidateClick)
   onCpCandidateClickRef.current = onCpCandidateClick
+  const updateBasemapCornersRef = useRef(updateBasemapCorners)
+  updateBasemapCornersRef.current = updateBasemapCorners
 
   const cpClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cpLastClickId = useRef<string | null>(null)
+  const basemapMarkersRef = useRef<maplibregl.Marker[]>([])
 
   // ---- map init ----
   useEffect(() => {
@@ -72,7 +75,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     renderProject(map, project)
   }, [project])
 
-  // ---- PDF basemap overlay ----
+  // ---- PDF basemap layer (URL変化時のみ再生成) ----
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
@@ -84,12 +87,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     map.addSource('basemap', {
       type: 'image',
       url: basemap.url,
-      coordinates: [
-        [corners.top_left.lng, corners.top_left.lat],
-        [corners.top_right.lng, corners.top_right.lat],
-        [corners.bottom_right.lng, corners.bottom_right.lat],
-        [corners.bottom_left.lng, corners.bottom_left.lat],
-      ],
+      coordinates: cornersToMapLibre(corners),
     })
     map.addLayer({
       id: 'basemap-layer',
@@ -97,6 +95,60 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       source: 'basemap',
       paint: { 'raster-opacity': 0.9 },
     }, 'print-bbox-fill')
+  }, [basemap?.url]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- PDF basemap コーナードラッグハンドル ----
+  useEffect(() => {
+    basemapMarkersRef.current.forEach(m => m.remove())
+    basemapMarkersRef.current = []
+
+    const map = mapRef.current
+    if (!map || !basemap) return
+
+    // 座標が変わった場合は image source を同期
+    const imgSrc = map.getSource('basemap') as maplibregl.ImageSource | undefined
+    imgSrc?.setCoordinates(cornersToMapLibre(basemap.corners))
+
+    // liveCorners: ドラッグ中の全コーナーの現在値
+    const liveCorners: MapImageCorners = {
+      top_left:     { ...basemap.corners.top_left },
+      top_right:    { ...basemap.corners.top_right },
+      bottom_right: { ...basemap.corners.bottom_right },
+      bottom_left:  { ...basemap.corners.bottom_left },
+    }
+
+    const cornerKeys = ['top_left', 'top_right', 'bottom_right', 'bottom_left'] as const
+    const markers = cornerKeys.map(key => {
+      const el = document.createElement('div')
+      el.style.cssText = [
+        'width:14px', 'height:14px', 'background:#f59e0b',
+        'border:2.5px solid white', 'border-radius:50%',
+        'cursor:grab', 'box-shadow:0 2px 6px rgba(0,0,0,0.5)',
+      ].join(';')
+
+      const { lat, lng } = basemap.corners[key]
+      const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
+        .setLngLat([lng, lat])
+        .addTo(map)
+
+      marker.on('drag', () => {
+        const ll = marker.getLngLat()
+        liveCorners[key] = { lat: ll.lat, lng: ll.lng }
+        const src = map.getSource('basemap') as maplibregl.ImageSource | undefined
+        src?.setCoordinates(cornersToMapLibre(liveCorners))
+        map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
+      })
+
+      marker.on('dragend', () => {
+        map.setPaintProperty('basemap-layer', 'raster-opacity', 0.9)
+        updateBasemapCornersRef.current({ ...liveCorners })
+      })
+
+      return marker
+    })
+
+    basemapMarkersRef.current = markers
+    return () => { markers.forEach(m => m.remove()) }
   }, [basemap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- competition map image overlay ----
@@ -113,12 +165,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     map.addSource('competition-map', {
       type: 'image',
       url,
-      coordinates: [
-        [corners.top_left.lng, corners.top_left.lat],
-        [corners.top_right.lng, corners.top_right.lat],
-        [corners.bottom_right.lng, corners.bottom_right.lat],
-        [corners.bottom_left.lng, corners.bottom_left.lat],
-      ],
+      coordinates: cornersToMapLibre(corners),
     })
     map.addLayer({
       id: 'competition-map-layer',
@@ -232,6 +279,16 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+}
+
+// ---- helpers ----
+function cornersToMapLibre(c: MapImageCorners): [[number,number],[number,number],[number,number],[number,number]] {
+  return [
+    [c.top_left.lng,     c.top_left.lat],
+    [c.top_right.lng,    c.top_right.lat],
+    [c.bottom_right.lng, c.bottom_right.lat],
+    [c.bottom_left.lng,  c.bottom_left.lat],
+  ]
 }
 
 // ---- layer init ----
