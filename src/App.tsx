@@ -5,15 +5,17 @@ import { promoteCandidateToCp } from './lib/utils'
 import MapView from './components/MapView/MapView'
 import CPEditModal from './components/CPEditModal'
 import CPPanel from './components/CPPanel'
+import BasemapModal from './components/BasemapModal'
 import type { Cp, CpCandidate } from './types'
 
 type ModalState =
   | { type: 'none' }
   | { type: 'cp-edit'; cp: Cp }
   | { type: 'cp-candidate'; candidate: CpCandidate }
+  | { type: 'basemap' }
 
 export default function App() {
-  const { project, setProject, clearProject, updateCp, deleteCp, addCp } = useProjectStore()
+  const { project, setProject, clearProject, updateCp, deleteCp, addCp, basemap } = useProjectStore()
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [panelOpen, setPanelOpen] = useState(false)
   const [mapCenter, setMapCenter] = useState<[number, number]>([136.0, 36.0])
@@ -50,6 +52,14 @@ export default function App() {
         <span style={{ fontWeight: 700, fontSize: 15 }}>orien-mapmake2</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {project && <span style={{ fontSize: 13, opacity: 0.8 }}>{project.metadata.area_name}</span>}
+          {project && (
+            <button
+              onClick={() => setModal({ type: 'basemap' })}
+              style={btn(basemap ? '#1a3a5a' : '#444', 'white')}
+            >
+              📄 {basemap ? 'ベースマップ編集' : 'PDFベースマップ'}
+            </button>
+          )}
           {project && (
             <button onClick={clearProject} style={btn('#444', 'white')}>✕ クリア</button>
           )}
@@ -105,6 +115,13 @@ export default function App() {
       )}
 
       {/* Modals */}
+      {modal.type === 'basemap' && (
+        <BasemapModal
+          onClose={() => setModal({ type: 'none' })}
+          print={project?.metadata.print}
+        />
+      )}
+
       {modal.type === 'cp-edit' && (
         <CPEditModal cp={modal.cp} onSave={handleCpSave} onDelete={handleCpDelete} onClose={() => setModal({ type: 'none' })} />
       )}

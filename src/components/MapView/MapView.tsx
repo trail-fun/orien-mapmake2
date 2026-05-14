@@ -19,7 +19,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   const mapRef = useRef<maplibregl.Map | null>(null)
   const cpDragMarkerRef = useRef<maplibregl.Marker | null>(null)
 
-  const { selectedCpId, setSelectedCpId, updateCp } = useProjectStore()
+  const { selectedCpId, setSelectedCpId, updateCp, basemap } = useProjectStore()
 
   const projectRef = useRef(project)
   projectRef.current = project
@@ -71,6 +71,33 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     if (!map || !map.isStyleLoaded()) return
     renderProject(map, project)
   }, [project])
+
+  // ---- PDF basemap overlay ----
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    if (map.getLayer('basemap-layer')) map.removeLayer('basemap-layer')
+    if (map.getSource('basemap')) map.removeSource('basemap')
+    if (!basemap) return
+
+    const { corners } = basemap
+    map.addSource('basemap', {
+      type: 'image',
+      url: basemap.url,
+      coordinates: [
+        [corners.top_left.lng, corners.top_left.lat],
+        [corners.top_right.lng, corners.top_right.lat],
+        [corners.bottom_right.lng, corners.bottom_right.lat],
+        [corners.bottom_left.lng, corners.bottom_left.lat],
+      ],
+    })
+    map.addLayer({
+      id: 'basemap-layer',
+      type: 'raster',
+      source: 'basemap',
+      paint: { 'raster-opacity': 0.9 },
+    }, 'print-bbox-fill')
+  }, [basemap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- competition map image overlay ----
   useEffect(() => {

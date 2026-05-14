@@ -17,6 +17,11 @@ export interface MapImageInfo {
   corners: MapImageCorners
 }
 
+export interface BasemapImage {
+  url: string
+  corners: MapImageCorners
+}
+
 export interface S1Metadata {
   version: string
   schema: string
