@@ -55,7 +55,10 @@ export default function BasemapAdjustPanel() {
   if (!basemap || !basemapPivot) return null
 
   const step = imgStep(basemap.corners)
-  const lngStep = step / Math.cos(basemapPivot.lat * Math.PI / 180)
+  const cosLat = Math.cos(basemapPivot.lat * Math.PI / 180)
+  const lngStep = step / cosLat
+  const activeStep = moveMode === 'crosshair' ? step / 10 : step
+  const activeLngStep = moveMode === 'crosshair' ? lngStep / 10 : lngStep
 
   const move = (dlat: number, dlng: number) => {
     if (moveMode === 'both') {
@@ -116,13 +119,13 @@ export default function BasemapAdjustPanel() {
       {/* 移動ボタン */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 34px)', gap: 3 }}>
         <span />
-        {iconBtn('↑', () => move(step, 0))}
+        {iconBtn('↑', () => move(activeStep, 0))}
         <span />
-        {iconBtn('←', () => move(0, -lngStep))}
+        {iconBtn('←', () => move(0, -activeLngStep))}
         <span />
-        {iconBtn('→', () => move(0, lngStep))}
+        {iconBtn('→', () => move(0, activeLngStep))}
         <span />
-        {iconBtn('↓', () => move(-step, 0))}
+        {iconBtn('↓', () => move(-activeStep, 0))}
         <span />
       </div>
 
