@@ -6,6 +6,7 @@ import MapView from './components/MapView/MapView'
 import CPEditModal from './components/CPEditModal'
 import CPPanel from './components/CPPanel'
 import BasemapModal from './components/BasemapModal'
+import BasemapAdjustPanel from './components/BasemapAdjustPanel'
 import type { Cp, CpCandidate } from './types'
 
 type ModalState =
@@ -85,6 +86,7 @@ export default function App() {
             onEdit={cp => setModal({ type: 'cp-edit', cp })}
             mapCenter={mapCenter}
           />
+          {basemap && <BasemapAdjustPanel />}
           {/* Legend */}
           <div style={{
             position: 'absolute', bottom: 24, left: 12, background: 'white',
