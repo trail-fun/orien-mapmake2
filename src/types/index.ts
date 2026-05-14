@@ -5,6 +5,18 @@ export interface PrintInfo {
   bbox: [number, number, number, number]
 }
 
+export interface MapImageCorners {
+  top_left: { lat: number; lng: number }
+  top_right: { lat: number; lng: number }
+  bottom_right: { lat: number; lng: number }
+  bottom_left: { lat: number; lng: number }
+}
+
+export interface MapImageInfo {
+  filename: string
+  corners: MapImageCorners
+}
+
 export interface S1Metadata {
   version: string
   schema: string
@@ -12,6 +24,7 @@ export interface S1Metadata {
   area_name: string
   memo: string
   print: PrintInfo
+  map_image?: MapImageInfo
 }
 
 export interface CpCandidate {
@@ -68,4 +81,5 @@ export interface ProjectData {
   cps: Cp[]
   surveyMemos: SurveyMemo[]
   photos: Record<string, string>
+  mapImageUrl?: string
 }

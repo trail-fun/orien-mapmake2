@@ -2,6 +2,7 @@ import JSZip from 'jszip'
 import type {
   ProjectData, Cp, CpCandidate, S1Metadata, PrintInfo,
   SurveyMemo, SurveyMemoObjectType, SurveyMemoStyle,
+  MapImageInfo, MapImageCorners,
 } from '../types'
 
 function defaultStyle(objectType: SurveyMemoObjectType): SurveyMemoStyle {
@@ -33,6 +34,17 @@ export async function parseS2Zip(file: File): Promise<ProjectData> {
     orientation: ((printRaw?.orientation ?? 'portrait') as string) as 'portrait' | 'landscape',
     bbox: (printRaw?.bbox as [number, number, number, number]) ?? [135, 34, 136, 35],
   }
+  const mapImageRaw = meta.map_image as Record<string, unknown> | undefined
+  let map_image: MapImageInfo | undefined
+  if (mapImageRaw?.filename && typeof mapImageRaw.filename === 'string' && mapImageRaw.filename !== '') {
+    const cornersRaw = mapImageRaw.corners as Record<string, { lat: number; lng: number }> | undefined
+    if (cornersRaw) {
+      map_image = {
+        filename: mapImageRaw.filename,
+        corners: cornersRaw as unknown as MapImageCorners,
+      }
+    }
+  }
   const metadata: S1Metadata = {
     version: (meta.version as string) ?? '1.0',
     schema: (meta.schema as string) ?? 'orienteering-survey-v1',
@@ -40,6 +52,7 @@ export async function parseS2Zip(file: File): Promise<ProjectData> {
     area_name: (meta.area_name as string) ?? '',
     memo: (meta.memo as string) ?? '',
     print,
+    map_image,
   }
 
   const cpCandidates: CpCandidate[] = []
@@ -110,5 +123,11 @@ export async function parseS2Zip(file: File): Promise<ProjectData> {
     }
   }
 
-  return { metadata, cpCandidates, cps, surveyMemos, photos }
+  let mapImageUrl: string | undefined
+  if (map_image?.filename) {
+    const dataUrl = photos[map_image.filename]
+    if (dataUrl) mapImageUrl = dataUrl
+  }
+
+  return { metadata, cpCandidates, cps, surveyMemos, photos, mapImageUrl }
 }

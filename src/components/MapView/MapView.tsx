@@ -72,6 +72,35 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     renderProject(map, project)
   }, [project])
 
+  // ---- competition map image overlay ----
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    if (map.getLayer('competition-map-layer')) map.removeLayer('competition-map-layer')
+    if (map.getSource('competition-map')) map.removeSource('competition-map')
+
+    const url = project.mapImageUrl
+    const corners = project.metadata.map_image?.corners
+    if (!url || !corners) return
+
+    map.addSource('competition-map', {
+      type: 'image',
+      url,
+      coordinates: [
+        [corners.top_left.lng, corners.top_left.lat],
+        [corners.top_right.lng, corners.top_right.lat],
+        [corners.bottom_right.lng, corners.bottom_right.lat],
+        [corners.bottom_left.lng, corners.bottom_left.lat],
+      ],
+    })
+    map.addLayer({
+      id: 'competition-map-layer',
+      type: 'raster',
+      source: 'competition-map',
+      paint: { 'raster-opacity': 0.85 },
+    }, 'print-bbox-fill')
+  }, [project.mapImageUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ---- selection highlight ----
   useEffect(() => {
     const map = mapRef.current
