@@ -191,6 +191,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       const cpHit = map.queryRenderedFeatures(e.point, { layers: ['cps-outer', 'cpc-outer'] })
       if (cpHit.length > 0) return
       e.preventDefault()
+      // ストアの最新ピボットを同期（パネル操作後のズレを防ぐ）
+      livePivot = basemapPivotRef.current ?? livePivot
       panStart = {
         lat: e.lngLat.lat, lng: e.lngLat.lng,
         snap: deepCopyCorners(liveCorners),
