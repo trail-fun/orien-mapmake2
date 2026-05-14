@@ -97,7 +97,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     }, 'print-bbox-fill')
   }, [basemap?.url]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---- PDF basemap コーナードラッグハンドル ----
+  // ---- PDF basemap コーナードラッグ（縦横比固定）& 全体移動 ----
   useEffect(() => {
     basemapMarkersRef.current.forEach(m => m.remove())
     basemapMarkersRef.current = []
@@ -105,41 +105,59 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     const map = mapRef.current
     if (!map || !basemap) return
 
-    // 座標が変わった場合は image source を同期
     const imgSrc = map.getSource('basemap') as maplibregl.ImageSource | undefined
     imgSrc?.setCoordinates(cornersToMapLibre(basemap.corners))
 
-    // liveCorners: ドラッグ中の全コーナーの現在値
-    const liveCorners: MapImageCorners = {
-      top_left:     { ...basemap.corners.top_left },
-      top_right:    { ...basemap.corners.top_right },
-      bottom_right: { ...basemap.corners.bottom_right },
-      bottom_left:  { ...basemap.corners.bottom_left },
+    const cornerKeys = ['top_left', 'top_right', 'bottom_right', 'bottom_left'] as const
+    type CK = typeof cornerKeys[number]
+    const opposites: Record<CK, CK> = {
+      top_left: 'bottom_right', top_right: 'bottom_left',
+      bottom_right: 'top_left', bottom_left: 'top_right',
     }
 
-    const cornerKeys = ['top_left', 'top_right', 'bottom_right', 'bottom_left'] as const
+    // ドラッグ中のリアルタイム座標（全ハンドラで共有）
+    const liveCorners = deepCopyCorners(basemap.corners)
+    // ドラッグ開始時点の座標（縦横比計算の基準）
+    const origCorners = deepCopyCorners(basemap.corners)
+
+    // ---- コーナーマーカー（縦横比固定ドラッグ） ----
     const markers = cornerKeys.map(key => {
       const el = document.createElement('div')
-      el.style.cssText = [
-        'width:14px', 'height:14px', 'background:#f59e0b',
-        'border:2.5px solid white', 'border-radius:50%',
-        'cursor:grab', 'box-shadow:0 2px 6px rgba(0,0,0,0.5)',
-      ].join(';')
+      el.style.cssText = 'width:14px;height:14px;background:#f59e0b;border:2.5px solid white;border-radius:50%;cursor:grab;box-shadow:0 2px 6px rgba(0,0,0,0.5);'
 
-      const { lat, lng } = basemap.corners[key]
       const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
-        .setLngLat([lng, lat])
+        .setLngLat([basemap.corners[key].lng, basemap.corners[key].lat])
         .addTo(map)
 
       marker.on('drag', () => {
-        const ll = marker.getLngLat()
-        liveCorners[key] = { lat: ll.lat, lng: ll.lng }
+        // 対角点を固定し、内積でスケール係数を計算
+        const opp = origCorners[opposites[key]]
+        const origVec = { dlat: origCorners[key].lat - opp.lat, dlng: origCorners[key].lng - opp.lng }
+        const drag = marker.getLngLat()
+        const newVec = { dlat: drag.lat - opp.lat, dlng: drag.lng - opp.lng }
+        const dot = newVec.dlat * origVec.dlat + newVec.dlng * origVec.dlng
+        const lenSq = origVec.dlat ** 2 + origVec.dlng ** 2
+        const s = lenSq > 0 ? Math.max(0.1, dot / lenSq) : 1
+
+        // 全コーナーを対角点から均一スケール
+        for (const k of cornerKeys) {
+          liveCorners[k] = {
+            lat: opp.lat + s * (origCorners[k].lat - opp.lat),
+            lng: opp.lng + s * (origCorners[k].lng - opp.lng),
+          }
+        }
+        // このマーカーを制約位置にスナップ・他のマーカーを移動
+        marker.setLngLat([liveCorners[key].lng, liveCorners[key].lat])
+        cornerKeys.forEach((k, i) => {
+          if (k !== key) basemapMarkersRef.current[i]?.setLngLat([liveCorners[k].lng, liveCorners[k].lat])
+        })
         const src = map.getSource('basemap') as maplibregl.ImageSource | undefined
         src?.setCoordinates(cornersToMapLibre(liveCorners))
         map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
       })
 
       marker.on('dragend', () => {
+        Object.assign(origCorners, deepCopyCorners(liveCorners))
         map.setPaintProperty('basemap-layer', 'raster-opacity', 0.9)
         updateBasemapCornersRef.current({ ...liveCorners })
       })
@@ -148,7 +166,57 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     })
 
     basemapMarkersRef.current = markers
-    return () => { markers.forEach(m => m.remove()) }
+
+    // ---- 全体移動（ベースマップ上をドラッグ） ----
+    let panStart: { lat: number; lng: number; snap: MapImageCorners } | null = null
+
+    const onBasemapDown = (e: maplibregl.MapLayerMouseEvent) => {
+      e.preventDefault()
+      panStart = { lat: e.lngLat.lat, lng: e.lngLat.lng, snap: deepCopyCorners(liveCorners) }
+      map.dragPan.disable()
+      map.getCanvas().style.cursor = 'grabbing'
+      map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
+    }
+
+    const onMousemove = (e: maplibregl.MapMouseEvent) => {
+      if (!panStart) return
+      const dlat = e.lngLat.lat - panStart.lat
+      const dlng = e.lngLat.lng - panStart.lng
+      for (const k of cornerKeys) {
+        liveCorners[k] = { lat: panStart.snap[k].lat + dlat, lng: panStart.snap[k].lng + dlng }
+      }
+      const src = map.getSource('basemap') as maplibregl.ImageSource | undefined
+      src?.setCoordinates(cornersToMapLibre(liveCorners))
+      markers.forEach((m, i) => m.setLngLat([liveCorners[cornerKeys[i]].lng, liveCorners[cornerKeys[i]].lat]))
+    }
+
+    const onMouseup = () => {
+      if (!panStart) return
+      panStart = null
+      map.dragPan.enable()
+      map.getCanvas().style.cursor = ''
+      map.setPaintProperty('basemap-layer', 'raster-opacity', 0.9)
+      Object.assign(origCorners, deepCopyCorners(liveCorners))
+      updateBasemapCornersRef.current({ ...liveCorners })
+    }
+
+    const onEnter = () => { if (!panStart) map.getCanvas().style.cursor = 'grab' }
+    const onLeave = () => { if (!panStart) map.getCanvas().style.cursor = '' }
+
+    map.on('mousedown', 'basemap-layer', onBasemapDown)
+    map.on('mousemove', onMousemove)
+    map.on('mouseup', onMouseup)
+    map.on('mouseenter', 'basemap-layer', onEnter)
+    map.on('mouseleave', 'basemap-layer', onLeave)
+
+    return () => {
+      markers.forEach(m => m.remove())
+      map.off('mousedown', 'basemap-layer', onBasemapDown)
+      map.off('mousemove', onMousemove)
+      map.off('mouseup', onMouseup)
+      map.off('mouseenter', 'basemap-layer', onEnter)
+      map.off('mouseleave', 'basemap-layer', onLeave)
+    }
   }, [basemap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- competition map image overlay ----
@@ -289,6 +357,15 @@ function cornersToMapLibre(c: MapImageCorners): [[number,number],[number,number]
     [c.bottom_right.lng, c.bottom_right.lat],
     [c.bottom_left.lng,  c.bottom_left.lat],
   ]
+}
+
+function deepCopyCorners(c: MapImageCorners): MapImageCorners {
+  return {
+    top_left:     { ...c.top_left },
+    top_right:    { ...c.top_right },
+    bottom_right: { ...c.bottom_right },
+    bottom_left:  { ...c.bottom_left },
+  }
 }
 
 // ---- layer init ----
