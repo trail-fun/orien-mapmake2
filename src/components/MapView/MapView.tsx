@@ -79,22 +79,21 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
+    if (map.getLayer('basemap-hit-layer')) map.removeLayer('basemap-hit-layer')
     if (map.getLayer('basemap-layer')) map.removeLayer('basemap-layer')
+    if (map.getSource('basemap-hit')) map.removeSource('basemap-hit')
     if (map.getSource('basemap')) map.removeSource('basemap')
     if (!basemap) return
 
     const { corners } = basemap
-    map.addSource('basemap', {
-      type: 'image',
-      url: basemap.url,
-      coordinates: cornersToMapLibre(corners),
-    })
-    map.addLayer({
-      id: 'basemap-layer',
-      type: 'raster',
-      source: 'basemap',
-      paint: { 'raster-opacity': 0.9 },
-    }, 'print-bbox-fill')
+    // ラスターレイヤーはレイヤーイベント非対応のため、
+    // 透明なポリゴンをヒットエリアとして重ねる
+    map.addSource('basemap-hit', { type: 'geojson', data: cornersToPolygon(corners) })
+    map.addSource('basemap', { type: 'image', url: basemap.url, coordinates: cornersToMapLibre(corners) })
+    map.addLayer({ id: 'basemap-layer', type: 'raster', source: 'basemap',
+      paint: { 'raster-opacity': 0.9 } }, 'print-bbox-fill')
+    map.addLayer({ id: 'basemap-hit-layer', type: 'fill', source: 'basemap-hit',
+      paint: { 'fill-opacity': 0 } }, 'print-bbox-fill')
   }, [basemap?.url]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- PDF basemap コーナードラッグ（縦横比固定）& 全体移動 ----
@@ -107,6 +106,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
 
     const imgSrc = map.getSource('basemap') as maplibregl.ImageSource | undefined
     imgSrc?.setCoordinates(cornersToMapLibre(basemap.corners))
+    ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
+      ?.setData(cornersToPolygon(basemap.corners))
 
     const cornerKeys = ['top_left', 'top_right', 'bottom_right', 'bottom_left'] as const
     type CK = typeof cornerKeys[number]
@@ -153,6 +154,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
         })
         const src = map.getSource('basemap') as maplibregl.ImageSource | undefined
         src?.setCoordinates(cornersToMapLibre(liveCorners))
+        ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
+          ?.setData(cornersToPolygon(liveCorners))
         map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
       })
 
@@ -171,6 +174,9 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     let panStart: { lat: number; lng: number; snap: MapImageCorners } | null = null
 
     const onBasemapDown = (e: maplibregl.MapLayerMouseEvent) => {
+      // CP・候補がある場所ではCP操作を優先
+      const cpHit = map.queryRenderedFeatures(e.point, { layers: ['cps-outer', 'cpc-outer'] })
+      if (cpHit.length > 0) return
       e.preventDefault()
       panStart = { lat: e.lngLat.lat, lng: e.lngLat.lng, snap: deepCopyCorners(liveCorners) }
       map.dragPan.disable()
@@ -187,6 +193,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       }
       const src = map.getSource('basemap') as maplibregl.ImageSource | undefined
       src?.setCoordinates(cornersToMapLibre(liveCorners))
+      ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
+        ?.setData(cornersToPolygon(liveCorners))
       markers.forEach((m, i) => m.setLngLat([liveCorners[cornerKeys[i]].lng, liveCorners[cornerKeys[i]].lat]))
     }
 
@@ -203,19 +211,19 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     const onEnter = () => { if (!panStart) map.getCanvas().style.cursor = 'grab' }
     const onLeave = () => { if (!panStart) map.getCanvas().style.cursor = '' }
 
-    map.on('mousedown', 'basemap-layer', onBasemapDown)
+    map.on('mousedown', 'basemap-hit-layer', onBasemapDown)
     map.on('mousemove', onMousemove)
     map.on('mouseup', onMouseup)
-    map.on('mouseenter', 'basemap-layer', onEnter)
-    map.on('mouseleave', 'basemap-layer', onLeave)
+    map.on('mouseenter', 'basemap-hit-layer', onEnter)
+    map.on('mouseleave', 'basemap-hit-layer', onLeave)
 
     return () => {
       markers.forEach(m => m.remove())
-      map.off('mousedown', 'basemap-layer', onBasemapDown)
+      map.off('mousedown', 'basemap-hit-layer', onBasemapDown)
       map.off('mousemove', onMousemove)
       map.off('mouseup', onMouseup)
-      map.off('mouseenter', 'basemap-layer', onEnter)
-      map.off('mouseleave', 'basemap-layer', onLeave)
+      map.off('mouseenter', 'basemap-hit-layer', onEnter)
+      map.off('mouseleave', 'basemap-hit-layer', onLeave)
     }
   }, [basemap]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -357,6 +365,20 @@ function cornersToMapLibre(c: MapImageCorners): [[number,number],[number,number]
     [c.bottom_right.lng, c.bottom_right.lat],
     [c.bottom_left.lng,  c.bottom_left.lat],
   ]
+}
+
+function cornersToPolygon(c: MapImageCorners) {
+  const ring = [
+    [c.top_left.lng, c.top_left.lat],
+    [c.top_right.lng, c.top_right.lat],
+    [c.bottom_right.lng, c.bottom_right.lat],
+    [c.bottom_left.lng, c.bottom_left.lat],
+    [c.top_left.lng, c.top_left.lat],
+  ]
+  return { type: 'FeatureCollection' as const, features: [{
+    type: 'Feature' as const, properties: {},
+    geometry: { type: 'Polygon' as const, coordinates: [ring] },
+  }] }
 }
 
 function deepCopyCorners(c: MapImageCorners): MapImageCorners {
