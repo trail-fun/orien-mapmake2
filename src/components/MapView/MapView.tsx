@@ -35,6 +35,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   const cpClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cpLastClickId = useRef<string | null>(null)
   const basemapMarkersRef = useRef<maplibregl.Marker[]>([])
+  const basemapCenterMarkerRef = useRef<maplibregl.Marker | null>(null)
 
   // ---- map init ----
   useEffect(() => {
@@ -110,16 +111,25 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       ?.setData(cornersToPolygon(basemap.corners))
 
     const cornerKeys = ['top_left', 'top_right', 'bottom_right', 'bottom_left'] as const
-    type CK = typeof cornerKeys[number]
-    const opposites: Record<CK, CK> = {
-      top_left: 'bottom_right', top_right: 'bottom_left',
-      bottom_right: 'top_left', bottom_left: 'top_right',
-    }
 
     // ドラッグ中のリアルタイム座標（全ハンドラで共有）
     const liveCorners = deepCopyCorners(basemap.corners)
     // ドラッグ開始時点の座標（縦横比計算の基準）
     const origCorners = deepCopyCorners(basemap.corners)
+
+    // 中心十字マーカー（CSSで描画）
+    const initCenter = calcCenter(basemap.corners)
+    const crosshairEl = document.createElement('div')
+    crosshairEl.style.cssText = 'position:relative;width:24px;height:24px;pointer-events:none;'
+    const arm = (css: string) => { const d = document.createElement('div'); d.style.cssText = css; return d }
+    crosshairEl.appendChild(arm('position:absolute;left:10px;top:0;width:3px;height:9px;background:#c0392b;box-shadow:0 0 0 1px white;'))
+    crosshairEl.appendChild(arm('position:absolute;left:10px;bottom:0;width:3px;height:9px;background:#c0392b;box-shadow:0 0 0 1px white;'))
+    crosshairEl.appendChild(arm('position:absolute;top:10px;left:0;height:3px;width:9px;background:#c0392b;box-shadow:0 0 0 1px white;'))
+    crosshairEl.appendChild(arm('position:absolute;top:10px;right:0;height:3px;width:9px;background:#c0392b;box-shadow:0 0 0 1px white;'))
+    const centerMarker = new maplibregl.Marker({ element: crosshairEl, draggable: false, anchor: 'center' })
+      .setLngLat([initCenter.lng, initCenter.lat])
+      .addTo(map)
+    basemapCenterMarkerRef.current = centerMarker
 
     // ---- コーナーマーカー（縦横比固定ドラッグ） ----
     const markers = cornerKeys.map(key => {
@@ -131,23 +141,21 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
         .addTo(map)
 
       marker.on('drag', () => {
-        // 対角点を固定し、内積でスケール係数を計算
-        const opp = origCorners[opposites[key]]
-        const origVec = { dlat: origCorners[key].lat - opp.lat, dlng: origCorners[key].lng - opp.lng }
+        // 中心を固定してスケール
+        const pivot = calcCenter(origCorners)
+        const origVec = { dlat: origCorners[key].lat - pivot.lat, dlng: origCorners[key].lng - pivot.lng }
         const drag = marker.getLngLat()
-        const newVec = { dlat: drag.lat - opp.lat, dlng: drag.lng - opp.lng }
+        const newVec = { dlat: drag.lat - pivot.lat, dlng: drag.lng - pivot.lng }
         const dot = newVec.dlat * origVec.dlat + newVec.dlng * origVec.dlng
         const lenSq = origVec.dlat ** 2 + origVec.dlng ** 2
         const s = lenSq > 0 ? Math.max(0.1, dot / lenSq) : 1
 
-        // 全コーナーを対角点から均一スケール
         for (const k of cornerKeys) {
           liveCorners[k] = {
-            lat: opp.lat + s * (origCorners[k].lat - opp.lat),
-            lng: opp.lng + s * (origCorners[k].lng - opp.lng),
+            lat: pivot.lat + s * (origCorners[k].lat - pivot.lat),
+            lng: pivot.lng + s * (origCorners[k].lng - pivot.lng),
           }
         }
-        // このマーカーを制約位置にスナップ・他のマーカーを移動
         marker.setLngLat([liveCorners[key].lng, liveCorners[key].lat])
         cornerKeys.forEach((k, i) => {
           if (k !== key) basemapMarkersRef.current[i]?.setLngLat([liveCorners[k].lng, liveCorners[k].lat])
@@ -156,6 +164,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
         src?.setCoordinates(cornersToMapLibre(liveCorners))
         ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
           ?.setData(cornersToPolygon(liveCorners))
+        const cc = calcCenter(liveCorners)
+        centerMarker.setLngLat([cc.lng, cc.lat])
         map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
       })
 
@@ -196,6 +206,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
         ?.setData(cornersToPolygon(liveCorners))
       markers.forEach((m, i) => m.setLngLat([liveCorners[cornerKeys[i]].lng, liveCorners[cornerKeys[i]].lat]))
+      const pc = calcCenter(liveCorners)
+      centerMarker.setLngLat([pc.lng, pc.lat])
     }
 
     const onMouseup = () => {
@@ -219,6 +231,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
 
     return () => {
       markers.forEach(m => m.remove())
+      centerMarker.remove()
+      basemapCenterMarkerRef.current = null
       map.off('mousedown', 'basemap-hit-layer', onBasemapDown)
       map.off('mousemove', onMousemove)
       map.off('mouseup', onMouseup)
@@ -387,6 +401,13 @@ function deepCopyCorners(c: MapImageCorners): MapImageCorners {
     top_right:    { ...c.top_right },
     bottom_right: { ...c.bottom_right },
     bottom_left:  { ...c.bottom_left },
+  }
+}
+
+function calcCenter(c: MapImageCorners): { lat: number; lng: number } {
+  return {
+    lat: (c.top_left.lat + c.top_right.lat + c.bottom_right.lat + c.bottom_left.lat) / 4,
+    lng: (c.top_left.lng + c.top_right.lng + c.bottom_right.lng + c.bottom_left.lng) / 4,
   }
 }
 
