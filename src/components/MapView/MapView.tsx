@@ -19,7 +19,7 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   const mapRef = useRef<maplibregl.Map | null>(null)
   const cpDragMarkerRef = useRef<maplibregl.Marker | null>(null)
 
-  const { selectedCpId, setSelectedCpId, updateCp, basemap, updateBasemapCorners } = useProjectStore()
+  const { selectedCpId, setSelectedCpId, updateCp, basemap, updateBasemapCorners, basemapPivot } = useProjectStore()
 
   const projectRef = useRef(project)
   projectRef.current = project
@@ -31,6 +31,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
   onCpCandidateClickRef.current = onCpCandidateClick
   const updateBasemapCornersRef = useRef(updateBasemapCorners)
   updateBasemapCornersRef.current = updateBasemapCorners
+  const basemapPivotRef = useRef(basemapPivot)
+  basemapPivotRef.current = basemapPivot
 
   const cpClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cpLastClickId = useRef<string | null>(null)
@@ -117,8 +119,8 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
     // ドラッグ開始時点の座標（縦横比計算の基準）
     const origCorners = deepCopyCorners(basemap.corners)
 
-    // 中心十字マーカー（CSSで描画）
-    const initCenter = calcCenter(basemap.corners)
+    // 中心十字マーカー（ストアのピボット座標、またはコーナー中心で初期化）
+    const initCenter = basemapPivotRef.current ?? calcCenter(basemap.corners)
     const crosshairEl = document.createElement('div')
     crosshairEl.style.cssText = 'position:relative;width:24px;height:24px;pointer-events:none;'
     const arm = (css: string) => { const d = document.createElement('div'); d.style.cssText = css; return d }
@@ -164,8 +166,6 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
         src?.setCoordinates(cornersToMapLibre(liveCorners))
         ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
           ?.setData(cornersToPolygon(liveCorners))
-        const cc = calcCenter(liveCorners)
-        centerMarker.setLngLat([cc.lng, cc.lat])
         map.setPaintProperty('basemap-layer', 'raster-opacity', 0.4)
       })
 
@@ -206,8 +206,6 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       ;(map.getSource('basemap-hit') as maplibregl.GeoJSONSource | undefined)
         ?.setData(cornersToPolygon(liveCorners))
       markers.forEach((m, i) => m.setLngLat([liveCorners[cornerKeys[i]].lng, liveCorners[cornerKeys[i]].lat]))
-      const pc = calcCenter(liveCorners)
-      centerMarker.setLngLat([pc.lng, pc.lat])
     }
 
     const onMouseup = () => {
@@ -240,6 +238,13 @@ export default function MapView({ project, onCpEdit, onCpCandidateClick, onCente
       map.off('mouseleave', 'basemap-hit-layer', onLeave)
     }
   }, [basemap]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---- ピボット（十字）位置の更新 ----
+  useEffect(() => {
+    if (basemapPivot && basemapCenterMarkerRef.current) {
+      basemapCenterMarkerRef.current.setLngLat([basemapPivot.lng, basemapPivot.lat])
+    }
+  }, [basemapPivot])
 
   // ---- competition map image overlay ----
   useEffect(() => {

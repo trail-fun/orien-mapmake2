@@ -1,14 +1,7 @@
-import { useProjectStore } from '../store/projectStore'
+import { useProjectStore, type LatLng } from '../store/projectStore'
 import type { MapImageCorners } from '../types'
 
 const KEYS = ['top_left', 'top_right', 'bottom_right', 'bottom_left'] as const
-
-function calcCenter(c: MapImageCorners) {
-  return {
-    lat: (c.top_left.lat + c.top_right.lat + c.bottom_right.lat + c.bottom_left.lat) / 4,
-    lng: (c.top_left.lng + c.top_right.lng + c.bottom_right.lng + c.bottom_left.lng) / 4,
-  }
-}
 
 function imgStep(c: MapImageCorners): number {
   const w = Math.hypot(c.top_right.lat - c.top_left.lat, c.top_right.lng - c.top_left.lng)
@@ -16,52 +9,45 @@ function imgStep(c: MapImageCorners): number {
   return Math.min(w, h) * 0.03
 }
 
-function translate(c: MapImageCorners, dlat: number, dlng: number): MapImageCorners {
-  return {
-    top_left:     { lat: c.top_left.lat + dlat,     lng: c.top_left.lng + dlng },
-    top_right:    { lat: c.top_right.lat + dlat,    lng: c.top_right.lng + dlng },
-    bottom_right: { lat: c.bottom_right.lat + dlat, lng: c.bottom_right.lng + dlng },
-    bottom_left:  { lat: c.bottom_left.lat + dlat,  lng: c.bottom_left.lng + dlng },
-  }
-}
-
-function scaleCorners(c: MapImageCorners, factor: number): MapImageCorners {
-  const ctr = calcCenter(c)
+function scaleAroundPivot(c: MapImageCorners, factor: number, pivot: LatLng): MapImageCorners {
   const result = {} as MapImageCorners
   for (const k of KEYS) {
     result[k] = {
-      lat: ctr.lat + factor * (c[k].lat - ctr.lat),
-      lng: ctr.lng + factor * (c[k].lng - ctr.lng),
+      lat: pivot.lat + factor * (c[k].lat - pivot.lat),
+      lng: pivot.lng + factor * (c[k].lng - pivot.lng),
     }
   }
   return result
 }
 
-function rotate(c: MapImageCorners, angleDeg: number): MapImageCorners {
-  const ctr = calcCenter(c)
+function rotateAroundPivot(c: MapImageCorners, angleDeg: number, pivot: LatLng): MapImageCorners {
   const a = angleDeg * Math.PI / 180
   const cosA = Math.cos(a), sinA = Math.sin(a)
-  const cosLat = Math.cos(ctr.lat * Math.PI / 180)
+  const cosLat = Math.cos(pivot.lat * Math.PI / 180)
   const result = {} as MapImageCorners
   for (const k of KEYS) {
-    const x = (c[k].lng - ctr.lng) * cosLat
-    const y = c[k].lat - ctr.lat
+    const x = (c[k].lng - pivot.lng) * cosLat
+    const y = c[k].lat - pivot.lat
     result[k] = {
-      lat: ctr.lat + (x * sinA + y * cosA),
-      lng: ctr.lng + (x * cosA - y * sinA) / cosLat,
+      lat: pivot.lat + (x * sinA + y * cosA),
+      lng: pivot.lng + (x * cosA - y * sinA) / cosLat,
     }
   }
   return result
 }
 
 export default function BasemapAdjustPanel() {
-  const { basemap, updateBasemapCorners } = useProjectStore()
-  if (!basemap) return null
+  const { basemap, updateBasemapCorners, basemapPivot, setBasemapPivot } = useProjectStore()
+  if (!basemap || !basemapPivot) return null
 
   const step = imgStep(basemap.corners)
-  const ctr = calcCenter(basemap.corners)
-  const lngStep = step / Math.cos(ctr.lat * Math.PI / 180)
-  const apply = (fn: (c: MapImageCorners) => MapImageCorners) =>
+  const cosLat = Math.cos(basemapPivot.lat * Math.PI / 180)
+  const lngStep = step / cosLat
+
+  const movePivot = (dlat: number, dlng: number) =>
+    setBasemapPivot({ lat: basemapPivot.lat + dlat, lng: basemapPivot.lng + dlng })
+
+  const applyCorners = (fn: (c: MapImageCorners) => MapImageCorners) =>
     updateBasemapCorners(fn(basemap.corners))
 
   const iconBtn = (icon: string, onClick: () => void) => (
@@ -89,32 +75,32 @@ export default function BasemapAdjustPanel() {
         ベースマップ調整
       </div>
 
-      {/* 移動 */}
-      {sectionLabel('移動')}
+      {/* 十字移動 */}
+      {sectionLabel('十字移動')}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 34px)', gap: 3 }}>
         <span />
-        {iconBtn('↑', () => apply(c => translate(c, step, 0)))}
+        {iconBtn('↑', () => movePivot(step, 0))}
         <span />
-        {iconBtn('←', () => apply(c => translate(c, 0, -lngStep)))}
+        {iconBtn('←', () => movePivot(0, -lngStep))}
         <span />
-        {iconBtn('→', () => apply(c => translate(c, 0, lngStep)))}
+        {iconBtn('→', () => movePivot(0, lngStep))}
         <span />
-        {iconBtn('↓', () => apply(c => translate(c, -step, 0)))}
+        {iconBtn('↓', () => movePivot(-step, 0))}
         <span />
       </div>
 
-      {/* 拡縮 */}
+      {/* 拡縮（十字基点） */}
       {sectionLabel('拡縮')}
       <div style={{ display: 'flex', gap: 3, justifyContent: 'center' }}>
-        {iconBtn('＋', () => apply(c => scaleCorners(c, 1.03)))}
-        {iconBtn('－', () => apply(c => scaleCorners(c, 1 / 1.03)))}
+        {iconBtn('＋', () => applyCorners(c => scaleAroundPivot(c, 1.03, basemapPivot)))}
+        {iconBtn('－', () => applyCorners(c => scaleAroundPivot(c, 1 / 1.03, basemapPivot)))}
       </div>
 
-      {/* 回転 */}
+      {/* 回転（十字基点、0.2°刻み） */}
       {sectionLabel('回転')}
       <div style={{ display: 'flex', gap: 3, justifyContent: 'center' }}>
-        {iconBtn('↺', () => apply(c => rotate(c, 1)))}
-        {iconBtn('↻', () => apply(c => rotate(c, -1)))}
+        {iconBtn('↺', () => applyCorners(c => rotateAroundPivot(c, 0.2, basemapPivot)))}
+        {iconBtn('↻', () => applyCorners(c => rotateAroundPivot(c, -0.2, basemapPivot)))}
       </div>
     </div>
   )
